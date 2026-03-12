@@ -312,7 +312,7 @@ class TrainingNotifier:
             lines.append(f"run: {self.run_name}")
         if self.experiment_name:
             lines.append(f"experiment: {self.experiment_name}")
-        lines.append(f"host: {self.host} pid={self.pid}")
+        lines.append(f"host: {self.host}")
         return lines
 
     def _detail_lines(self, details: list[tuple[str, Any]]) -> list[str]:
@@ -326,7 +326,12 @@ class TrainingNotifier:
     def _format_progress(self, step: int, total_steps: int | None) -> str:
         if total_steps:
             percent = (step / total_steps) * 100
-            return f"{step}/{total_steps} ({percent:.1f}%)"
+            width = 18
+            filled = min(width, max(int(round((step / total_steps) * width)), 0))
+            if step > 0:
+                filled = max(filled, 1)
+            bar = "#" * filled + " " * (width - filled)
+            return f"[{bar}] {percent:>5.1f}% {step}/{total_steps}"
         return str(step)
 
     def _compact_traceback(self, error: BaseException, max_chars: int = 1200) -> str:

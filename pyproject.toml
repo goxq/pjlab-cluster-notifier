@@ -1,6 +1,6 @@
 [project]
 name = "pjlab-cluster-notifier"
-version = "0.1.0"
+version = "0.2.0"
 description = "Lightweight notification toolkit for cluster jobs and training workflows."
 readme = "README.md"
 requires-python = ">=3.10"
