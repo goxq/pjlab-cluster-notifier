@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.parse
 import urllib.request
@@ -126,12 +127,39 @@ class FeishuBotClient:
             message_id=message_id,
         )
 
+    def send_post(
+        self,
+        *,
+        receive_id: str,
+        title: str,
+        lines: list[str],
+        receive_id_type: str = "chat_id",
+        message_id: str | None = None,
+    ) -> dict:
+        return self.send_message(
+            receive_id=receive_id,
+            receive_id_type=receive_id_type,
+            msg_type="post",
+            content={
+                "post": {
+                    "zh_cn": {
+                        "title": title,
+                        "content": [
+                            [{"tag": "text", "text": line}] for line in lines if line
+                        ],
+                    }
+                }
+            },
+            message_id=message_id,
+        )
+
 
 @dataclass(slots=True)
 class FeishuChannel:
     client: FeishuBotClient
     receive_id: str
     receive_id_type: str = "chat_id"
+    message_style: str = "post"
 
     @classmethod
     def from_env(cls) -> "FeishuChannel":
@@ -139,9 +167,20 @@ class FeishuChannel:
             client=FeishuBotClient.from_env(),
             receive_id=os.environ["FEISHU_RECEIVE_ID"],
             receive_id_type=os.getenv("FEISHU_RECEIVE_ID_TYPE", "open_id"),
+            message_style=os.getenv("FEISHU_MESSAGE_STYLE", "post").lower(),
         )
 
     def send(self, message: TextMessage) -> dict:
+        if self.message_style == "post":
+            title, lines = self._build_post_content(message.text)
+            return self.client.send_post(
+                receive_id=self.receive_id,
+                receive_id_type=self.receive_id_type,
+                title=title,
+                lines=lines,
+                message_id=message.message_id,
+            )
+
         return self.client.send_message(
             receive_id=self.receive_id,
             receive_id_type=self.receive_id_type,
@@ -152,6 +191,26 @@ class FeishuChannel:
 
     def send_text(self, text: str, message_id: str | None = None) -> dict:
         return self.send(TextMessage(text=text, message_id=message_id))
+
+    def _build_post_content(self, text: str) -> tuple[str, list[str]]:
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            return "Notification", ["(empty)"]
+
+        title = lines[0]
+        body: list[str] = []
+        key_value_pattern = re.compile(r"^([a-zA-Z0-9_\-. ]+):\s*(.+)$")
+        for line in lines[1:]:
+            matched = key_value_pattern.match(line)
+            if not matched:
+                body.append(f"• {line}")
+                continue
+            key, value = matched.groups()
+            body.append(f"【{key.strip()}】 {value.strip()}")
+
+        if not body:
+            body = ["• (no details)"]
+        return title, body
 
 __all__ = [
     "DEFAULT_BASE_URL",

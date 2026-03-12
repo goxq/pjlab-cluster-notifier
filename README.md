@@ -61,6 +61,7 @@ Optional environment variables:
 - `FEISHU_RECEIVE_ID_TYPE` default: `open_id`
 - `FEISHU_BASE_URL`
 - `FEISHU_TIMEOUT`
+- `FEISHU_MESSAGE_STYLE` default: `post` (`post` uses Feishu rich text, `text` keeps plain text)
 
 ## Development
 
