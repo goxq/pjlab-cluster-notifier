@@ -270,7 +270,7 @@ class FeishuChannel:
 
     def _build_interactive_elements(self, lines: list[str]) -> list[dict]:
         detail_lines: list[str] = []
-        compact_pairs: list[tuple[str, str]] = []
+        compact_pairs: list[tuple[str, str, str]] = []
         summary_values: dict[str, str] = {}
         progress_line: str | None = None
 
@@ -290,7 +290,13 @@ class FeishuChannel:
                 summary_values[normalized_key] = value
                 continue
             if normalized_key in _COMPACT_METRIC_LABELS:
-                compact_pairs.append((_COMPACT_METRIC_LABELS[normalized_key], value))
+                compact_pairs.append(
+                    (
+                        normalized_key,
+                        _COMPACT_METRIC_LABELS[normalized_key],
+                        value,
+                    )
+                )
                 continue
 
             detail_lines.append(
@@ -298,26 +304,20 @@ class FeishuChannel:
             )
 
         elements: list[dict] = []
-        summary_block = self._build_summary_block(progress_line, summary_values)
-        if summary_block:
+        if progress_line:
             elements.append(
-                {
-                    "tag": "div",
-                    "text": {
-                        "tag": "plain_text",
-                        "content": summary_block,
-                    },
-                }
+                self._build_markdown_block("Progress", progress_line)
             )
+
+        summary_fields = self._build_summary_fields(summary_values)
+        if summary_fields:
+            elements.append({"tag": "div", "fields": summary_fields})
 
         if compact_pairs:
             elements.append(
                 {
                     "tag": "div",
-                    "text": {
-                        "tag": "plain_text",
-                        "content": self._build_compact_metrics_block(compact_pairs),
-                    },
+                    "fields": self._build_metric_fields(compact_pairs),
                 }
             )
 
@@ -331,7 +331,7 @@ class FeishuChannel:
                     },
                 }
             )
-        else:
+        elif not elements:
             elements.append(
                 {
                     "tag": "div",
@@ -344,20 +344,37 @@ class FeishuChannel:
 
         return elements
 
-    def _build_summary_block(
-        self,
-        progress_line: str | None,
-        summary_values: dict[str, str],
-    ) -> str:
-        summary_pairs: list[tuple[str, str]] = []
-        if progress_line:
-            summary_pairs.append(("progress", progress_line))
-
+    def _build_summary_fields(self, summary_values: dict[str, str]) -> list[dict]:
+        summary_fields: list[dict] = []
         for key, label in _SUMMARY_DETAIL_LABELS.items():
             value = summary_values.get(key)
             if value:
-                summary_pairs.append((label, value))
+                summary_fields.append(
+                    self._build_field(label, value, max_short_value_length=22)
+                )
 
+        dist_value = self._build_dist_value(summary_values)
+        if dist_value:
+            summary_fields.append(
+                self._build_field("Dist", dist_value, max_short_value_length=18)
+            )
+
+        return summary_fields
+
+    def _build_metric_fields(
+        self,
+        pairs: list[tuple[str, str, str]],
+    ) -> list[dict]:
+        return [
+            self._build_field(
+                label,
+                self._normalize_metric_value(key, value),
+                max_short_value_length=16,
+            )
+            for key, label, value in pairs
+        ]
+
+    def _build_dist_value(self, summary_values: dict[str, str]) -> str | None:
         dist_parts: list[str] = []
         node_count = summary_values.get("node_count")
         proc_per_node = summary_values.get("proc_per_node")
@@ -373,40 +390,53 @@ class FeishuChannel:
             dist_parts.append(f"rank {node_rank}")
         if master_addr:
             dist_parts.append(f"master {master_addr}")
-        if dist_parts:
-            summary_pairs.append(("dist", " | ".join(dist_parts)))
+        if not dist_parts:
+            return None
+        return " | ".join(dist_parts)
 
-        if not summary_pairs:
-            return ""
+    def _build_markdown_block(self, label: str, value: str) -> dict:
+        return {
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": self._format_field_content(label, value),
+            },
+        }
 
-        label_width = max(len(label) for label, _ in summary_pairs)
-        return "\n".join(
-            f"{label.ljust(label_width)} {value}" for label, value in summary_pairs
+    def _build_field(
+        self,
+        label: str,
+        value: str,
+        *,
+        max_short_value_length: int,
+    ) -> dict:
+        normalized_value = " ".join(value.split())
+        return {
+            "is_short": (
+                "\n" not in value
+                and len(normalized_value) <= max_short_value_length
+            ),
+            "text": {
+                "tag": "lark_md",
+                "content": self._format_field_content(label, value),
+            },
+        }
+
+    def _format_field_content(self, label: str, value: str) -> str:
+        return (
+            f"**{self._escape_lark_md(label)}**\n"
+            f"{self._escape_lark_md(value)}"
         )
 
-    def _build_compact_metrics_block(self, pairs: list[tuple[str, str]]) -> str:
-        columns = 2
-        rows: list[str] = []
-        formatted_pairs = [self._format_compact_pair(label, value) for label, value in pairs]
-        left_column_width = max(
-            (len(formatted_pairs[index]) for index in range(0, len(formatted_pairs), columns)),
-            default=0,
-        )
+    def _normalize_metric_value(self, key: str, value: str) -> str:
+        if key == "throughput":
+            return value.replace(" samples/s", "/s")
+        return value
 
-        for index in range(0, len(formatted_pairs), columns):
-            row_pairs = formatted_pairs[index : index + columns]
-            if len(row_pairs) == 2:
-                rows.append(f"{row_pairs[0].ljust(left_column_width)}    {row_pairs[1]}")
-            else:
-                rows.append(row_pairs[0])
-
-        return "\n".join(rows)
-
-    def _format_compact_pair(self, label: str, value: str) -> str:
-        normalized_value = value.replace(" samples/s", "/s")
-        return f"{label:<4} {normalized_value}"
-
-    def _parse_detail_lines(self, lines: list[str]) -> list[tuple[str | None, str | None, str]]:
+    def _parse_detail_lines(
+        self,
+        lines: list[str],
+    ) -> list[tuple[str | None, str | None, str]]:
         parsed: list[tuple[str | None, str | None, str]] = []
         key_value_pattern = re.compile(r"^([a-zA-Z0-9_\-. ]+):\s*(.+)$")
         for line in lines:
@@ -445,11 +475,11 @@ __all__ = [
 
 
 _SUMMARY_DETAIL_LABELS = {
-    "run": "run",
-    "job_id": "job_id",
-    "host": "host",
-    "time": "time",
-    "submit_time": "submit",
+    "run": "Run",
+    "job_id": "Job ID",
+    "host": "Host",
+    "time": "Time",
+    "submit_time": "Submitted",
 }
 
 _SUMMARY_AUX_KEYS = {
@@ -460,17 +490,17 @@ _SUMMARY_AUX_KEYS = {
 }
 
 _COMPACT_METRIC_LABELS = {
-    "stage": "stg",
-    "epoch": "ep",
-    "step": "step",
-    "last_step": "step",
-    "loss": "loss",
-    "eval_loss": "eval",
-    "accuracy": "acc",
-    "learning_rate": "lr",
-    "eta": "eta",
-    "elapsed": "ela",
-    "duration": "dur",
-    "throughput": "tps",
-    "grad_norm": "grad",
+    "stage": "Stage",
+    "epoch": "Epoch",
+    "step": "Step",
+    "last_step": "Last Step",
+    "loss": "Loss",
+    "eval_loss": "Eval Loss",
+    "accuracy": "Accuracy",
+    "learning_rate": "LR",
+    "eta": "ETA",
+    "elapsed": "Elapsed",
+    "duration": "Duration",
+    "throughput": "Throughput",
+    "grad_norm": "Grad Norm",
 }
